@@ -1,0 +1,9 @@
+node_modules
+.cache
+dist
+web/dist
+*.tsbuildinfo
+*.log
+.DS_Store
+.playwright-mcp
+.claude/settings.local.json
