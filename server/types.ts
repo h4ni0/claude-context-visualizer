@@ -8,6 +8,7 @@ export type SessionListItem = {
   realTotal: number | null;
   model: string | null;
   hasCompaction: boolean;
+  agent: string;
 };
 
 export type ProjectInfo = {
@@ -15,6 +16,7 @@ export type ProjectInfo = {
   path: string;
   sessionCount: number;
   latestMtimeMs: number;
+  agent: string;
 };
 
 export type Headline = {
@@ -25,6 +27,7 @@ export type Headline = {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   outputTokens: number;
+  agent?: string;
 };
 
 export type LeafItem = {
@@ -38,7 +41,7 @@ export type LeafItem = {
 };
 
 // Bump when the snapshot shape changes so stale on-disk caches are ignored.
-export const SNAPSHOT_SCHEMA_VERSION = 2;
+export const SNAPSHOT_SCHEMA_VERSION = 3;
 
 export type SubBucket = {
   id: string;

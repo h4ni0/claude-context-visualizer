@@ -2,6 +2,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const CLAUDE_PROJECTS_DIR = join(homedir(), ".claude", "projects");
+export const OPENCLAW_SESSIONS_DIR = join(homedir(), ".openclaw", "agents", "main", "sessions");
+export const OPENCLAW_SESSIONS_INDEX = join(OPENCLAW_SESSIONS_DIR, "sessions.json");
+export const HERMES_SESSIONS_DIR = join(homedir(), ".hermes", "sessions");
+export const OPENCODE_DB_PATH = join(homedir(), ".local", "share", "opencode", "opencode.db");
 
 export const CACHE_DIR = join(import.meta.dir, "..", ".cache");
 

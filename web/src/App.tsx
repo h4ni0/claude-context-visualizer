@@ -20,7 +20,7 @@ export function App() {
           <Detail session={selected} />
         ) : (
           <div className="empty">
-            <h2>Claude Context Visualizer</h2>
+            <h2>Context Visualizer</h2>
             <p>Select a session from the left to see its context breakdown.</p>
           </div>
         )}

@@ -105,7 +105,17 @@ export function Detail({ session }: Props) {
               {(pct * 100).toFixed(1)}% <span className="of">of {fmt(snap.headline.modelCap)} context window</span>
             </div>
           </div>
-          <div className="hero-model">{snap.headline.model}</div>
+            <div className="hero-model">
+              {snap.headline.agent && (
+                <span className={`agent-badge agent-${snap.headline.agent}`}>
+                  {snap.headline.agent === "claude" ? "Claude Code" :
+                   snap.headline.agent === "openclaw" ? "OpenClaw" :
+                   snap.headline.agent === "hermes" ? "Hermes" :
+                   snap.headline.agent === "opencode" ? "OpenCode" : snap.headline.agent}
+                </span>
+              )}
+              {snap.headline.model}
+            </div>
         </div>
         <div className="hero-progress">
           <div className="hero-progress-bar" style={{ width: `${Math.min(100, pct * 100).toFixed(2)}%` }} />
