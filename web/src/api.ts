@@ -8,6 +8,7 @@ export type SessionListItem = {
   realTotal: number | null;
   model: string | null;
   hasCompaction: boolean;
+  agent: string;
 };
 
 export type ProjectInfo = {
@@ -15,6 +16,7 @@ export type ProjectInfo = {
   path: string;
   sessionCount: number;
   latestMtimeMs: number;
+  agent: string;
 };
 
 export type LeafItem = {
@@ -34,6 +36,7 @@ export type Headline = {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   outputTokens: number;
+  agent?: string;
 };
 export type CompactionInfo = {
   boundaryCount: number;

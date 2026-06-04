@@ -11,19 +11,11 @@ import {
   type Headline,
 } from "./types.ts";
 import { realTotalFromUsage } from "./usage.ts";
+import type { NormalizedRecord } from "./providers/types.ts";
 
-// Leaf content and tool inputs are truncated to keep snapshot payloads bounded.
 const MAX_CONTENT_CHARS = 50_000;
 
-// cl100k_base systematically UNDER-counts Claude 4.x tokens by ~15-25%
-// (verified across multiple sources; ANSI shell output up to 30% under). This
-// blanket factor brings identified bucket totals closer to Claude's actual BPE
-// counts, shrinking the residual toward the true (system prompt + tool schemas)
-// overhead — typically 10-40k.
 const CL100K_TO_CLAUDE = 1.18;
-
-// When a thinking block's plaintext is encrypted (only an opaque signature is
-// visible), estimate its token cost as signature_length × this ratio.
 const SIGNATURE_TOKEN_RATIO = 0.33;
 
 type ChildAccum = {
@@ -32,9 +24,6 @@ type ChildAccum = {
   items: LeafItem[];
 };
 
-// Assemble a top-level bucket from its accumulated children. `skipEmpty` drops
-// zero-token empty children (used by Messages); `sort` orders children by
-// tokens descending (used by the tool/attachment buckets).
 function buildBucket(
   id: string,
   name: string,
@@ -51,8 +40,6 @@ function buildBucket(
   return bucket;
 }
 
-// Multiply every leaf's tokens by `factor`, re-rolling the sums up to child and
-// bucket totals. Used for both the cl100k calibration and the fit-to-realTotal pass.
 function scaleBuckets(buckets: Bucket[], factor: number): void {
   for (const b of buckets) {
     let bSum = 0;
@@ -69,8 +56,6 @@ function scaleBuckets(buckets: Bucket[], factor: number): void {
   }
 }
 
-// Pretty-print a tool's input object for display. Falls back to a string cast
-// for non-object inputs; truncated to keep the payload bounded.
 function formatToolInput(input: unknown): string {
   if (input == null) return "";
   try {
@@ -90,10 +75,9 @@ function modelCapFor(model: string | null): number {
   return 200_000;
 }
 
-// Strip ANSI escapes for cleaner display in the UI (does NOT affect tokenization,
-// which we do on the raw bytes that were actually in the API call).
 const ANSI_RE = /\x1B\[[0-9;]*[A-Za-z]/g;
 function stripAnsi(s: string): string {
+  if (typeof s !== "string") return String(s);
   return s.replace(ANSI_RE, "");
 }
 
@@ -116,15 +100,16 @@ function blockText(block: any): string {
         })
         .join("\n");
     }
-    return JSON.stringify(block.content ?? "");
+    if (block.content != null) return JSON.stringify(block.content);
+    return "";
   }
-  if (block.type === "text") return block.text ?? "";
+  if (block.type === "text") {
+    const t = block.text;
+    return t != null && typeof t === "string" ? t : t != null ? JSON.stringify(t) : "";
+  }
   if (block.type === "thinking") {
-    // Opus 4.7 stores reasoning encrypted in `signature`; the plaintext
-    // `thinking` field is often empty. The signature length is a proxy for
-    // the actual reasoning tokens consumed by the model.
     const plain = block.thinking ?? block.text ?? "";
-    if (plain) return plain;
+    if (typeof plain === "string" && plain) return plain;
     if (typeof block.signature === "string" && block.signature.length > 0) {
       return block.signature;
     }
@@ -139,14 +124,11 @@ function attachmentText(rec: any): string {
   if (!a) return "";
   if (typeof a === "string") return a;
   if (typeof a.text === "string") return a.text;
-  // file attachments: content is { type, file: { filePath, content } }
   if (a.type === "file" && a.file && typeof a.file.content === "string") return a.file.content;
   if (a.content && typeof a.content === "object" && a.content.file && typeof a.content.file.content === "string") {
     return a.content.file.content;
   }
-  // edited_text_file: contains a snippet of the edit
   if (typeof a.snippet === "string") return a.snippet;
-  // task_reminder: content is an array of TODO objects {id, subject, status, ...}
   if (Array.isArray(a.content)) {
     return a.content
       .map((b: any) => {
@@ -155,20 +137,18 @@ function attachmentText(rec: any): string {
         if (b && typeof b === "object" && (b.subject || b.id)) {
           const status = b.status ? `[${b.status}] ` : "";
           const subj = b.subject ?? b.id ?? "";
-          const desc = b.description ? ` — ${b.description}` : "";
+          const desc = b.description ? ` \u2014 ${b.description}` : "";
           return `${status}${subj}${desc}`;
         }
         return JSON.stringify(b);
       })
       .join("\n");
   }
-  // MCP resource: content.contents[].text
   if (a.content && typeof a.content === "object" && Array.isArray(a.content.contents)) {
     return a.content.contents
       .map((c: any) => (typeof c?.text === "string" ? c.text : JSON.stringify(c)))
       .join("\n");
   }
-  // nested_memory: content.content
   if (a.content && typeof a.content === "object" && typeof a.content.content === "string") {
     return a.content.content;
   }
@@ -178,7 +158,6 @@ function attachmentText(rec: any): string {
   if (typeof a.value === "string") return a.value;
   if (typeof a.prompt === "string") return a.prompt;
   if (typeof a.condition === "string") return a.condition;
-  // Prefer rich "addedLines" / "addedBlocks" (text) over short names.
   if (Array.isArray(a.addedBlocks)) {
     return a.addedBlocks
       .map((b: any) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : JSON.stringify(b)))
@@ -198,9 +177,6 @@ function attachmentText(rec: any): string {
 
 function attachmentLabel(rec: any): string {
   const a = rec?.attachment ?? {};
-  // Prefer the canonical `type` so attachments are grouped by category, not
-  // by specific filename — except for actual file content where filename is
-  // the most informative label.
   if (a.type === "file") {
     if (typeof a.filename === "string") return `file: ${a.filename}`;
     if (a.file && typeof a.file.filePath === "string") return `file: ${a.file.filePath}`;
@@ -213,17 +189,23 @@ function attachmentLabel(rec: any): string {
   return "attachment";
 }
 
-function summarize(s: string, max = 120): string {
-  if (!s) return "";
-  const oneLine = stripAnsi(s).replace(/\s+/g, " ").trim();
+function summarize(s: unknown, max = 120): string {
+  if (s == null) return "";
+  let str: string;
+  if (typeof s === "string") {
+    str = s;
+  } else {
+    try { str = JSON.stringify(s); } catch { str = String(s); }
+  }
+  if (!str) return "";
+  const oneLine = stripAnsi(str).replace(/\s+/g, " ").trim();
   if (oneLine.length <= max) return oneLine;
-  return oneLine.slice(0, max) + "…";
+  return oneLine.slice(0, max) + "\u2026";
 }
 
 function toolUseSummary(name: string, input: any): string {
   if (!input || typeof input !== "object") return name;
   const i = input as Record<string, any>;
-  // Path-based tools first
   if (typeof i.file_path === "string") {
     let s = `${name} ${i.file_path}`;
     if (typeof i.limit === "number" || typeof i.offset === "number") {
@@ -233,40 +215,34 @@ function toolUseSummary(name: string, input: any): string {
     return s;
   }
   if (typeof i.path === "string") return `${name} ${i.path}`;
-  // Bash / general command
   if (typeof i.command === "string") return `${name} ${summarize(i.command, 80)}`;
-  // Search
   if (typeof i.query === "string") return `${name} ${summarize(i.query, 80)}`;
   if (typeof i.pattern === "string") return `${name} ${summarize(i.pattern, 80)}`;
-  // URL / navigation
   if (typeof i.url === "string") return `${name} ${i.url}`;
-  // Agent / prompt-bearing
   if (typeof i.prompt === "string") return `${name} ${summarize(i.prompt, 80)}`;
-  // AskUserQuestion
   if (Array.isArray(i.questions) && i.questions[0]?.question) {
     return `${name} ${summarize(i.questions[0].question, 80)}`;
   }
-  // Task tools
   if (typeof i.subject === "string") return `${name} ${summarize(i.subject, 80)}`;
   if (typeof i.taskId === "string") {
-    const status = typeof i.status === "string" ? ` → ${i.status}` : "";
+    const status = typeof i.status === "string" ? ` \u2192 ${i.status}` : "";
     return `${name} #${i.taskId}${status}`;
   }
-  // Playwright / browser tools
   if (typeof i.element === "string") return `${name} ${summarize(i.element, 80)}`;
   if (typeof i.text === "string") return `${name} ${summarize(i.text, 80)}`;
   if (typeof i.key === "string") return `${name} ${i.key}`;
-  if (typeof i.filename === "string") return `${name} → ${i.filename}`;
+  if (typeof i.filename === "string") return `${name} \u2192 ${i.filename}`;
   if (typeof i.level === "string") return `${name} level=${i.level}`;
-  // Fallback: description (lowest priority — many tools have one but it's redundant)
   if (typeof i.description === "string") return `${name} ${summarize(i.description, 80)}`;
   return name;
 }
 
-export async function computeSnapshot(filePath: string, knownMtimeMs?: number): Promise<Snapshot> {
-  const mtimeMs = knownMtimeMs ?? (await stat(filePath)).mtimeMs;
-  const sessionId = basename(filePath, ".jsonl");
-  const records = await readAllJSONL(filePath);
+export function buildSnapshot(
+  records: NormalizedRecord[],
+  sessionId: string,
+  filePath: string,
+  mtimeMs: number,
+): Snapshot {
   const warnings: string[] = [];
 
   // 1. Find latest assistant with usage (the anchor)
@@ -287,9 +263,7 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
     }
   }
 
-  // 2. Find compaction boundaries. Honor only the latest boundary that comes
-  // BEFORE the anchor assistant message — boundaries after the anchor don't
-  // affect what was in context for that call.
+  // 2. Find compaction boundaries
   let latestBoundaryIdx = -1;
   let compaction: CompactionInfo | null = null;
   let boundaryCount = 0;
@@ -311,8 +285,8 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
     }
   }
   if (compaction) compaction.boundaryCount = boundaryCount;
+
   if (latestAssistantIdx === -1) {
-    // No usage found — return an empty snapshot
     warnings.push("No assistant message with usage found.");
     return {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -324,7 +298,6 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
         modelCap: modelCapFor(model),
         model: model ?? "unknown",
         inputTokens: 0,
-
         cacheCreationTokens: 0,
         cacheReadTokens: 0,
         outputTokens: 0,
@@ -346,12 +319,10 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
     outputTokens: usage.output_tokens ?? 0,
   };
 
-  // 3. Walk records from latestBoundary+1 up to (but not including) latestAssistantIdx.
-  // The latest assistant's content is its OUTPUT (not in its input context).
+  // 3. Walk records from latestBoundary+1 up to latestAssistantIdx (exclusive)
   const startIdx = latestBoundaryIdx + 1;
-  const endIdx = latestAssistantIdx; // exclusive
+  const endIdx = latestAssistantIdx;
 
-  // Bucket accumulators
   const messagesChildren: Record<string, ChildAccum> = {
     user: { name: "User messages", tokens: 0, items: [] },
     thinking: { name: "Thinking", tokens: 0, items: [] },
@@ -361,8 +332,6 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
   const toolResultsChildren: Record<string, ChildAccum> = {};
   const attachmentsChildren: Record<string, ChildAccum> = {};
 
-  // Map tool_use_id → tool name (to group tool_result by tool name) and →
-  // input (so a tool_result can show the call that produced it).
   const toolUseIdToName = new Map<string, string>();
   const toolUseIdToInput = new Map<string, unknown>();
   for (let i = startIdx; i < endIdx; i++) {
@@ -416,7 +385,6 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
             fullContent: text.slice(0, MAX_CONTENT_CHARS),
           });
         } else if (block?.type === "image") {
-          // images we can't tokenize; record as 0
           const child = messagesChildren.user!;
           child.items.push({
             tokens: 0,
@@ -429,9 +397,6 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
     } else if (r.type === "assistant" && r.message?.content) {
       const blocks: any[] = Array.isArray(r.message.content) ? r.message.content : [];
       assistantTurnCounter++;
-      // First pass: compute cl100k of non-thinking content and aggregate
-      // signature length, so we can derive thinking tokens from the turn's
-      // ground-truth output_tokens (text + thinking + tool_use sum on output).
       let nonThinkOutputTokens = 0;
       let totalSigLen = 0;
       const sigPerBlock: number[] = [];
@@ -451,8 +416,6 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
         typeof r.message?.usage?.output_tokens === "number"
           ? r.message.usage.output_tokens
           : null;
-      // thinking_total = output_tokens − cl100k(text+tool_use). If unknown,
-      // fall back to signature_length × SIGNATURE_TOKEN_RATIO (empirically fit).
       const thinkingBudget = turnOutputTokens != null
         ? Math.max(0, turnOutputTokens - nonThinkOutputTokens)
         : null;
@@ -481,22 +444,19 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
             summary = summarize(plain) || "[thinking]";
             fullContent = plain.slice(0, MAX_CONTENT_CHARS);
           } else if (sig) {
-            // Distribute the turn's thinking budget across thinking blocks
-            // proportionally to their signature length. If no budget known,
-            // fall back to sig × 0.33.
             if (thinkingBudget != null && totalSigLen > 0) {
               const share = sigPerBlock[thinkingBlockIdx] / totalSigLen;
               tokens = Math.round(thinkingBudget * share);
             } else {
               tokens = Math.round(sig.length * SIGNATURE_TOKEN_RATIO);
             }
-            summary = `[encrypted reasoning · ~${tokens.toLocaleString()} tok]`;
+            summary = `[encrypted reasoning \u00b7 ~${tokens.toLocaleString()} tok]`;
             fullContent =
               `(Reasoning is encrypted by Claude; only an opaque signature is visible.)\n\n` +
               `signature length: ${sig.length.toLocaleString()} chars\n` +
               (thinkingBudget != null
                 ? `derived from this turn's output_tokens (${turnOutputTokens}) minus visible content (${nonThinkOutputTokens}).`
-                : `estimated as signature_length × ${SIGNATURE_TOKEN_RATIO}.`);
+                : `estimated as signature_length \u00d7 ${SIGNATURE_TOKEN_RATIO}.`);
             thinkingBlockIdx++;
           } else {
             thinkingBlockIdx++;
@@ -519,8 +479,6 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
             tokens,
             turn: assistantTurnCounter,
             summary: toolUseSummary(tname, block.input),
-            // The call's input is its entire content, shown as the labeled
-            // "Tool input" block in the UI (no separate output).
             fullContent: "",
             toolInput: formatToolInput(block.input ?? {}),
           });
@@ -541,19 +499,12 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
       });
     }
   }
-
-  // Build buckets. Messages preserves its user/thinking/assistant order and
-  // drops empty children; the tool/attachment buckets sort children by tokens.
+  // 4. Build buckets
   const messagesBucket = buildBucket("messages", "Messages", messagesChildren, { skipEmpty: true });
   const toolCallsBucket = buildBucket("tool_calls", "Tool calls", toolCallsChildren, { sort: true });
   const toolResultsBucket = buildBucket("tool_results", "Tool results", toolResultsChildren, { sort: true });
   const attachmentsBucket = buildBucket("attachments", "Attachments", attachmentsChildren, { sort: true });
 
-  // Calibrate cl100k counts up toward Claude's BPE, then — if the identified
-  // buckets still over-shoot realTotal — scale them back down to fit. The
-  // residual floors at 0: when the sums match it holds the system prompt; if
-  // they over-shoot we present a truthful "no residual" rather than reserving
-  // a fake slice.
   const idBuckets = [messagesBucket, toolCallsBucket, toolResultsBucket, attachmentsBucket];
   scaleBuckets(idBuckets, CL100K_TO_CLAUDE);
 
@@ -585,15 +536,15 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
           {
             tokens: residual,
             turn: 0,
-            summary: "Claude Code system prompt + tool-schema definitions + harness overhead",
+            summary: "System prompt + tool-schema definitions + harness overhead",
             fullContent:
-              `This bucket is computed as a residual: realTotal − Σ(identified buckets).\n\n` +
+              `This bucket is computed as a residual: realTotal \u2212 \u03a3(identified buckets).\n\n` +
               `It primarily reflects:\n` +
-              `  • The Claude Code system prompt (~3-6k tokens, version-dependent).\n` +
-              `  • Tool schema JSON sent to the model (~5-25k typical; ~15k+ when MCP bundles like\n` +
+              `  \u2022 The system prompt (~3-6k tokens, version-dependent).\n` +
+              `  \u2022 Tool schema JSON sent to the model (~5-25k typical; ~15k+ when MCP bundles like\n` +
               `    Playwright / Chrome DevTools are loaded).\n` +
-              `  • Per-message wrapper overhead (role markers, tool-call envelopes).\n\n` +
-              `Token counts use cl100k_base × ${CL100K_TO_CLAUDE} calibration to approximate Claude's BPE. ` +
+              `  \u2022 Per-message wrapper overhead (role markers, tool-call envelopes).\n\n` +
+              `Token counts use cl100k_base \u00d7 ${CL100K_TO_CLAUDE} calibration to approximate Claude's BPE. ` +
               `For exact counts, use Anthropic's /v1/messages/count_tokens API (free, requires key).\n\n` +
               `realTotal: ${realTotal}\n` +
               `identifiedSum: ${identifiedSum}\n` +
@@ -605,7 +556,6 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
     ],
   };
 
-  // Order: System, Messages, Tool calls, Tool results, Attachments
   const buckets: Bucket[] = [
     systemBucket,
     messagesBucket,
@@ -624,4 +574,12 @@ export async function computeSnapshot(filePath: string, knownMtimeMs?: number): 
     compaction,
     warnings,
   };
+}
+
+// Legacy entry point for direct JSONL reading (Claude Code).
+export async function computeSnapshot(filePath: string, knownMtimeMs?: number): Promise<Snapshot> {
+  const mtimeMs = knownMtimeMs ?? (await stat(filePath)).mtimeMs;
+  const sessionId = basename(filePath, ".jsonl");
+  const records = await readAllJSONL(filePath);
+  return buildSnapshot(records, sessionId, filePath, mtimeMs);
 }

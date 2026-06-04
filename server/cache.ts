@@ -24,9 +24,9 @@ export async function readCached(sessionId: string, sourceMtimeMs: number): Prom
   }
 }
 
-export async function writeCached(snap: Snapshot): Promise<void> {
+export async function writeCached(sessionId: string, snap: Snapshot): Promise<void> {
   await ensureCacheDir();
-  await writeFile(cachePath(snap.sessionId), JSON.stringify(snap));
+  await writeFile(cachePath(sessionId), JSON.stringify(snap));
 }
 
 export async function invalidateCache(sessionId: string): Promise<boolean> {
