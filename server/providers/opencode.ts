@@ -272,13 +272,10 @@ export const opencodeProvider: Provider = {
     const d = getDb();
     if (!d) return [];
 
-    let projectFilter: string | null = null;
-    if (projectSlug.startsWith("opencode:")) {
-      projectFilter = projectSlug.slice("opencode:".length);
-    }
+    const projectFilter = projectSlug;
 
     let sessionRows: OpenCodeSessionRow[];
-    if (projectFilter) {
+    if (projectFilter !== "sessions") {
       sessionRows = queryAll<OpenCodeSessionRow>(
         "SELECT id, project_id, agent, model, title, tokens_input, tokens_output, cost, directory, slug FROM session WHERE project_id = ? ORDER BY time_created DESC",
         [projectFilter],

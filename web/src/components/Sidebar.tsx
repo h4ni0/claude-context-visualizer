@@ -23,7 +23,7 @@ const AGENT_COLORS: Record<string, string> = {
 };
 
 function fmtTokens(n: number | null): string {
-  if (n == null) return "\u2014";
+  if (n == null) return "—";
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return n.toString();
@@ -45,9 +45,15 @@ function fmtDate(ms: number): string {
 
 export function Sidebar({ selected, onSelect, collapsed, onToggle }: Props) {
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
-  const [sessionsByProject, setSessionsByProject] = useState<Record<string, SessionListItem[]>>({});
-  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set(["claude"]));
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set());
+  const [sessionsByProject, setSessionsByProject] = useState<
+    Record<string, SessionListItem[]>
+  >({});
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(
+    new Set(["claude"]),
+  );
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
+    new Set(),
+  );
   const [query, setQuery] = useState("");
 
   useEffect(() => {
@@ -70,7 +76,12 @@ export function Sidebar({ selected, onSelect, collapsed, onToggle }: Props) {
   }, [expandedProjects]);
 
   const grouped = useMemo(() => {
-    const groups: { agent: string; label: string; color: string; projects: ProjectInfo[] }[] = [];
+    const groups: {
+      agent: string;
+      label: string;
+      color: string;
+      projects: ProjectInfo[];
+    }[] = [];
     for (const agent of AGENT_ORDER) {
       const ps = projects.filter((p) => p.agent === agent);
       if (ps.length > 0) {
@@ -94,7 +105,9 @@ export function Sidebar({ selected, onSelect, collapsed, onToggle }: Props) {
         projects: g.projects.filter(
           (p) =>
             p.path.toLowerCase().includes(q) ||
-            (sessionsByProject[p.slug] ?? []).some((s) => s.title.toLowerCase().includes(q)),
+            (sessionsByProject[p.slug] ?? []).some((s) =>
+              s.title.toLowerCase().includes(q),
+            ),
         ),
       }))
       .filter((g) => g.projects.length > 0);
@@ -109,7 +122,7 @@ export function Sidebar({ selected, onSelect, collapsed, onToggle }: Props) {
           title="Expand sidebar"
           aria-label="Expand sidebar"
         >
-          \u00bb
+          »
         </button>
       </aside>
     );
@@ -127,11 +140,11 @@ export function Sidebar({ selected, onSelect, collapsed, onToggle }: Props) {
             title="Collapse sidebar"
             aria-label="Collapse sidebar"
           >
-            \u00ab
+            «
           </button>
         </div>
         <input
-          placeholder="Search projects or titles\u2026"
+          placeholder="Search projects or titles…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -141,6 +154,7 @@ export function Sidebar({ selected, onSelect, collapsed, onToggle }: Props) {
       )}
       {filtered.map((group) => {
         const agentOpen = expandedAgents.has(group.agent);
+
         return (
           <div key={group.agent} className="agent-group">
             <div
@@ -154,58 +168,66 @@ export function Sidebar({ selected, onSelect, collapsed, onToggle }: Props) {
                 });
               }}
             >
-              <span className="chevron">\u25b6</span>
-              <span
-                className="agent-dot"
-                style={{ background: group.color }}
-              />
+              <span className="chevron">▶</span>
+              <span className="agent-dot" style={{ background: group.color }} />
               <span className="label">{group.label}</span>
             </div>
-            {agentOpen && group.projects.map((p) => {
-              const isOpen = expandedProjects.has(p.slug);
-              const shortLabel = p.path.split("/").slice(-2).join("/") || p.path;
-              return (
-                <div key={p.slug} className="project-group">
-                  <div
-                    className={`project-name ${isOpen ? "open" : ""}`}
-                    onClick={() => {
-                      setExpandedProjects((prev) => {
-                        const n = new Set(prev);
-                        if (n.has(p.slug)) n.delete(p.slug);
-                        else n.add(p.slug);
-                        return n;
-                      });
-                    }}
-                    title={p.path}
-                  >
-                    <span className="project-chevron">\u25b6</span>
-                    <span className="label">{shortLabel}</span>
-                    <span className="count">{p.sessionCount}</span>
-                  </div>
-                  {isOpen && (sessionsByProject[p.slug] ?? []).map((s) => (
+            {agentOpen &&
+              group.projects.map((p, i, p_arr) => {
+                const isOpen = expandedProjects.has(p.slug);
+                const shortLabel =
+                  p.path.split("/").slice(-2).join("/") || p.path;
+
+                return (
+                  <div key={p.slug} className="project-group">
                     <div
-                      key={s.id}
-                      className={`session-row${selected === s.id ? " selected" : ""}`}
-                      onClick={() => onSelect(s)}
-                      title={s.title}
+                      className={`project-name ${isOpen ? "open" : ""}`}
+                      onClick={() => {
+                        setExpandedProjects((prev) => {
+                          const n = new Set(prev);
+                          if (n.has(p.slug)) n.delete(p.slug);
+                          else n.add(p.slug);
+                          return n;
+                        });
+                      }}
+                      title={p.path}
                     >
-                      <div className="session-title">{s.title}</div>
-                      <div className="session-meta">
-                        <span className="tokens">{fmtTokens(s.realTotal)} tok</span>
-                        {s.hasCompaction && <span className="compaction-mark">compacted</span>}
-                        <span className="sep">\u00b7</span>
-                        <span>{fmtDate(s.mtimeMs)}</span>
+                      <span className="project-chevron">▶</span>
+                      <span className="label">{shortLabel}</span>
+                      <span className="count">{p.sessionCount}</span>
+                    </div>
+                    {isOpen &&
+                      (sessionsByProject[p.slug] ?? []).map((s) => (
+                        <div
+                          key={s.id}
+                          className={`session-row${selected === s.id ? " selected" : ""}`}
+                          onClick={() => onSelect(s)}
+                          title={s.title}
+                        >
+                          <div className="session-title">{s.title}</div>
+                          <div className="session-meta">
+                            <span className="tokens">
+                              {fmtTokens(s.realTotal)} tok
+                            </span>
+                            {s.hasCompaction && (
+                              <span className="compaction-mark">compacted</span>
+                            )}
+                            <span className="sep">·</span>
+                            <span>{fmtDate(s.mtimeMs)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    {isOpen && !sessionsByProject[p.slug] && (
+                      <div
+                        className="loading"
+                        style={{ padding: "12px 16px", textAlign: "left" }}
+                      >
+                        Loading…
                       </div>
-                    </div>
-                  ))}
-                  {isOpen && !sessionsByProject[p.slug] && (
-                    <div className="loading" style={{ padding: "12px 16px", textAlign: "left" }}>
-                      Loading\u2026
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    )}
+                  </div>
+                );
+              })}
           </div>
         );
       })}
