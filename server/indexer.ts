@@ -38,6 +38,15 @@ function extractTitle(raw: string): string {
   if (args && args[1] && args[1].trim()) {
     return truncate(args[1].trim());
   }
+  // A slash command with no args still names the session (e.g. "/init"), which
+  // is useful — except "/clear", which says nothing about what the session
+  // does, so we skip it and let the caller scan to the next real message.
+  const name = raw.match(/<command-name>([\s\S]*?)<\/command-name>/);
+  if (name && name[1] && name[1].trim()) {
+    const cmd = name[1].trim();
+    if (cmd !== "/clear") return truncate(cmd);
+    return "";
+  }
   // Otherwise strip all <command-*> and <local-command-*> wrappers and take
   // the first non-empty line of what's left.
   const cleaned = raw
@@ -46,9 +55,9 @@ function extractTitle(raw: string): string {
     .replace(/\s+/g, " ")
     .trim();
   if (cleaned) return truncate(cleaned);
-  // Last resort: first non-empty line of raw.
-  const line = raw.split("\n").find((l) => l.trim()) ?? "";
-  return truncate(line);
+  // Nothing human-readable left (record was only command/caveat wrappers).
+  // Return "" so the caller keeps scanning to the next user record.
+  return "";
 }
 
 function truncate(s: string): string {
@@ -154,7 +163,7 @@ export async function indexSessionFile(filePath: string): Promise<{
     if (rec?.type === "system" && rec?.subtype === "compact_boundary") {
       hasCompaction = true;
     }
-    if (!title && rec?.type === "user" && rec?.message?.content) {
+    if (!title && rec?.type === "user" && !rec?.isMeta && rec?.message?.content) {
       const c = rec.message.content;
       let raw = "";
       if (typeof c === "string") {
